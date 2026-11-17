@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>How a bank login talks to the database</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet">
+<style>
+:root{
+  color-scheme:dark;
+  --bg:#0a0b10;--surface:#11131a;--raised:#1a1d28;--console:#0d0f15;--cborder:#1d2130;
+  --text:#eef2f7;--text2:#9aa6ba;--muted:#68758c;
+  --accent:#38bdf8;--ok:#34d399;--ok-soft:rgba(52,211,153,.12);--warn:#fbbf24;--warn-soft:rgba(251,191,36,.12);
+  --danger:#fb7185;--danger-soft:rgba(251,113,133,.14);
+  box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);
+}
+html{scroll-padding-top:calc(env(safe-area-inset-top,0px) + 72px)}
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:'Inter',-apple-system,sans-serif;background:var(--bg);color:var(--text);line-height:1.6;-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);background:rgba(10,11,16,.95);z-index:60}
+code,input{font-family:'JetBrains Mono',monospace}
+button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.top{position:sticky;top:env(safe-area-inset-top,0px);z-index:50;background:rgba(10,11,16,.85);backdrop-filter:blur(16px);padding:16px 24px}
+.top-in{max-width:1080px;margin:0 auto;display:flex;align-items:center;gap:12px;font-size:14px;font-weight:500;color:var(--text2)}
+.logo{width:30px;height:30px;border-radius:8px;background:var(--surface);border:1px solid var(--cborder);display:grid;place-items:center;font:600 11px 'JetBrains Mono',monospace;color:var(--accent)}
+.stage{max-width:1080px;margin:36px auto 80px;padding:0 20px}
+h1{font-size:clamp(28px,4vw,38px);line-height:1.15;letter-spacing:-.03em;font-weight:600;margin-bottom:10px}
+.lead{color:var(--text2);font-size:16px;margin-bottom:28px;max-width:56ch}
+.ctl{display:flex;flex-wrap:wrap;justify-content:space-between;gap:14px;margin-bottom:32px}
+.seg{display:inline-flex;background:var(--surface);border:1px solid var(--cborder);border-radius:11px;padding:3px;gap:2px}
+.btns{display:flex;gap:8px;flex-wrap:wrap}
+.cb-btn{cursor:pointer;font-family:'Inter',sans-serif}
+.seg .cb-btn{border:0;background:transparent;color:var(--text2);padding:7px 15px;border-radius:8px;font-size:13px;font-weight:500}
+.seg .cb-btn:hover{color:var(--text)}
+.seg .cb-btn.active{background:var(--raised);color:var(--text);box-shadow:inset 0 1px 0 rgba(255,255,255,.06)}
+.chips{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;margin-top:18px}
+.chips>span{font-size:13px;color:var(--muted)}
+.chips .cb-btn{font:12px 'JetBrains Mono',monospace;padding:6px 12px;border:1px solid var(--cborder);background:transparent;border-radius:99px;color:var(--text2)}
+.chips .cb-btn:hover{border-color:var(--accent);color:var(--text)}
+.grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.15fr);gap:48px;align-items:start}
+@media(max-width:900px){.grid{grid-template-columns:1fr;gap:36px}}
+@media(min-width:901px){.left{position:sticky;top:calc(env(safe-area-inset-top,0px) + 80px)}}
+
+/* fake bank site */
+.browser{border:1px solid #2a3042;border-radius:16px;overflow:hidden;background:#fff;box-shadow:0 30px 70px rgba(0,0,0,.55)}
+.urlbar{padding:10px 16px;background:#13161e;font:12px 'JetBrains Mono',monospace;color:var(--text2);overflow-x:auto;white-space:nowrap}
+.bk{color:#18222e;font-family:'Inter',sans-serif}
+.bk-head{background:#0e2a47;color:#fff;padding:18px 24px;display:flex;align-items:baseline;gap:10px}
+.wm{font:600 22px 'Fraunces',Georgia,serif;letter-spacing:-.01em}
+.bk-head small{margin-left:auto;font-size:12px;opacity:.7}
+.bk-body{padding:26px 24px 28px;background:#f8f9fb}
+.bk h3{font:600 20px 'Fraunces',Georgia,serif;margin-bottom:2px}
+.bk .sub{font-size:13px;color:#5f6e80;margin-bottom:8px}
+.bk label{display:block;font-size:12.5px;font-weight:600;color:#3b4858;margin:16px 0 6px}
+.bk input{width:100%;background:#fff;border:1px solid #d3dae4;color:#18222e;font:14px 'Inter',sans-serif;padding:11px 13px;border-radius:10px}
+.bk input:focus-visible{outline:2px solid #0e2a47;outline-offset:1px}
+.bk-btn{margin-top:20px;width:100%;background:#0e2a47;color:#fff;border:0;border-radius:10px;padding:12px;font:600 14px 'Inter',sans-serif;cursor:pointer}
+.bk-btn:hover{background:#0a2038}
+.bk-res{margin-top:18px}
+.card{background:#fff;border:1px solid #e1e6ee;border-radius:12px;padding:16px 18px;font-size:14px}
+.card b{display:block;font:600 17px 'Fraunces',Georgia,serif;margin-bottom:2px}
+.card.err{border-color:#ecc3c3;background:#fff7f7;color:#8a1c1c}
+.card small{color:#5f6e80;font-size:13px}
+.tx{width:100%;border-collapse:collapse;font-size:13px;background:#fff;border:1px solid #e1e6ee;border-radius:12px;overflow:hidden}
+.tx th,.tx td{padding:10px 12px;text-align:left;border-bottom:1px solid #eef1f5}
+.tx tr:last-child td{border-bottom:0}
+.tx th{color:#5f6e80;font-weight:600;font-size:12px;background:#fbfcfd}
+.tx td:last-child,.tx th:last-child{text-align:right}
+.tx .acct{color:#8a94a6;font-size:12px}
+.verdict{margin-top:14px;padding:11px 14px;border-radius:10px;font-size:13.5px;display:none}
+.verdict.show{display:block}
+.verdict.ok{background:var(--ok-soft);color:var(--ok)}.verdict.bad{background:var(--danger-soft);color:var(--danger)}.verdict.warn{background:var(--warn-soft);color:var(--warn)}
+
+/* backend timeline */
+.pipe{list-style:none;position:relative;padding-left:30px;display:grid;gap:28px}
+.pipe::before{content:"";position:absolute;left:5px;top:8px;bottom:8px;width:1px;background:var(--cborder)}
+.st{position:relative}
+.st::before{content:"";position:absolute;left:-30px;top:3px;width:11px;height:11px;border-radius:50%;background:var(--bg);border:1.5px solid #323849;transition:all .3s}
+.st.on::before{background:var(--accent);border-color:var(--accent);box-shadow:0 0 0 5px rgba(56,189,248,.14)}
+.sh{display:flex;align-items:baseline;gap:8px;font-size:13.5px;font-weight:600;color:var(--muted);margin-bottom:9px;transition:color .3s}
+.sh i{font:500 11px 'JetBrains Mono',monospace;font-style:normal;opacity:.8}
+.st.on .sh{color:var(--text)}
+.pn{background:var(--console);border:1px solid var(--cborder);border-radius:12px;overflow:hidden;transition:border-color .3s}
+.st.on .pn{border-color:rgba(56,189,248,.35)}
+.sb{padding:14px 16px;font:12.5px/1.85 'JetBrains Mono',monospace;color:#e2e8f0;white-space:pre-wrap;word-break:break-word;overflow-x:auto}
+.k{color:var(--accent);font-weight:600}
+mark{border-radius:4px;padding:2px 5px;color:inherit}
+.slot{background:var(--warn-soft);color:var(--warn)}
+.inj{background:var(--danger-soft);color:var(--danger);font-weight:600}
+.ph{background:var(--ok-soft);color:var(--ok);font-weight:600}
+.dead{color:var(--muted);text-decoration:line-through;font-style:italic}
+.mut{color:var(--muted)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 16px;padding:10px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--cborder)}
+.legend mark{font:11px 'JetBrains Mono',monospace}
+.expl{padding:13px 16px;border-top:1px solid var(--cborder);background:rgba(56,189,248,.05);font-size:13.5px;color:#e2e8f0}
+.expl code{color:var(--accent);font-size:12.5px}
+.tbl{width:100%;border-collapse:collapse;font:12px 'JetBrains Mono',monospace}
+.tbl th{text-align:left;padding:6px 10px;color:var(--text2);font-weight:500;border-bottom:1px solid var(--cborder)}
+.tbl td{padding:7px 10px;border-bottom:1px solid rgba(255,255,255,.04);color:#94a3b8}
+.tbl tr:last-child td{border-bottom:0}
+.tbl tr.hit td{background:var(--ok-soft);color:#fff}
+.tbl.bad tr.hit td,.tbl tr.leak td{background:var(--danger-soft);color:#fff}
+.cnt{font:12px 'Inter',sans-serif;color:var(--text2);padding:10px 10px 0}
+.dberr{color:var(--danger);font:13px 'Inter',sans-serif}
+.cl{display:block;padding:0 8px;border-left:2px solid transparent;opacity:.35}
+.cl.t{opacity:1;border-left-color:var(--accent);background:rgba(56,189,248,.07)}
+.resp{margin-top:10px;padding-top:10px;border-top:1px dashed var(--cborder);font:13px 'Inter',sans-serif;color:var(--text2);white-space:normal}
+
+.notes{margin-top:56px;padding-top:28px;border-top:1px solid var(--cborder);max-width:640px}
+.nh{font-size:14px;font-weight:600;margin-bottom:10px}
+.notes ul{padding-left:18px;font-size:15px;color:var(--text2);line-height:1.75}
+.notes li{margin-bottom:6px}
+.notes strong{color:var(--text);font-weight:500}
+.notes code{font-size:12.5px;padding:1.5px 6px;border-radius:5px;background:var(--console);border:1px solid var(--cborder);color:#e2e8f0}
+.prompt{margin-top:18px;display:flex;flex-wrap:wrap;gap:12px;justify-content:space-between;align-items:center}
+.pq{flex:1;min-width:220px;font-size:14px;font-weight:500}
+.cp{font:500 12.5px 'Inter',sans-serif;padding:7px 14px;border-radius:8px;border:1px solid var(--cborder);background:var(--surface);color:var(--text2);cursor:pointer}
+.cp:hover{border-color:var(--accent);color:var(--text)}
+.pa{width:100%;display:none;padding:12px 16px;border-radius:10px;background:var(--surface);border:1px solid var(--cborder);font-size:13.5px;color:var(--text2)}
+.pa.show{display:block}.pa strong{color:var(--ok);font-weight:600}
+.foot{margin-top:28px;font-size:12px;color:var(--muted)}
+</style>
+</head>
+<body>
+<header class="top"><div class="top-in"><div class="logo">&gt;_</div>How a login talks to the database</div></header>
+<main class="stage">
+  <h1>What the server does with what you type</h1>
+  <p class="lead">Use the bank page on the left. The right shows each step the server takes, live.</p>
+
+  <div class="ctl">
+    <div class="seg"><button class="cb-btn active" id="tLogin">Login</button><button class="cb-btn" id="tSearch">Search</button></div>
+    <div class="seg"><button class="cb-btn active" id="mUnsafe">Vulnerable code</button><button class="cb-btn" id="mSafe">Fixed code</button></div>
+  </div>
+
+  <div class="grid">
+    <div class="left">
+      <div class="browser">
+        <div class="urlbar" id="url"></div>
+        <div class="bk">
+          <div class="bk-head"><span class="wm">Meridian</span><small>Online Banking</small></div>
+          <div class="bk-body">
+            <h3 id="bkT"></h3><div class="sub" id="bkS"></div>
+            <label id="l1" for="wu"></label><input id="wu" autocomplete="off" autocapitalize="none" spellcheck="false">
+            <div id="f2"><label for="wp">Password</label><input id="wp" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+            <button class="bk-btn" id="go"></button>
+            <div class="bk-res" id="bkRes" aria-live="polite"></div>
+          </div>
+        </div>
+      </div>
+      <div class="verdict" id="verdict" aria-live="polite"></div>
+      <div class="chips"><span>Try</span><div class="btns" id="chips"></div></div>
+    </div>
+
+    <ol class="pipe" id="pipe">
+      <li class="st"><div class="sh"><i>1</i>Browser sends the form</div><div class="pn"><div class="sb" id="b1"></div></div></li>
+      <li class="st"><div class="sh"><i>2</i>Backend builds the query</div><div class="pn"><div class="sb" id="b2"></div></div></li>
+      <li class="st"><div class="sh"><i>3</i>Query is sent to the database</div><div class="pn"><div class="sb" id="b3"></div><div class="legend" id="lg"></div><div class="expl" id="ex"></div></div></li>
+      <li class="st"><div class="sh"><i>4</i>Database finds matching rows</div><div class="pn"><div class="sb" id="b4"></div></div></li>
+      <li class="st"><div class="sh"><i>5</i>Backend decides the response</div><div class="pn"><div class="sb" id="b5"></div></div></li>
+    </ol>
+  </div>
+
+  <div class="notes">
+    <div class="nh">Remember</div>
+    <ul>
+      <li><strong>The backend glues your text into a sentence,</strong> and the database obeys all of it.</li>
+      <li><strong>A <code>--</code> comment switches off the rest of the line,</strong> including checks the developer added.</li>
+    </ul>
+    <div class="prompt"><div class="pq">On the login page, which line signs you in?</div><button class="cp" id="cp">Reveal answer</button>
+      <div class="pa" id="pa"><strong><code>if len(rows) &gt; 0</code></strong>. If the query returns any row, the backend signs in as the first one. It never checks the password again.</div></div>
+  </div>
+  <div class="foot">A classroom simulation. It imitates a vulnerable site and never connects to a real database.</div>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+const esc=s=>s.replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const K=s=>`<span class="k">${s}</span>`;
+const mk=(c,t)=>`<mark class="${c}">${esc(t)}</mark>`;
+const enc=encodeURIComponent;
+const USERS=[{id:1,u:"admin",p:"s3cret!",n:"Administrator console",s:"All customer accounts"},{id:2,u:"alice",p:"cat123",n:"Alice Morgan",s:"Checking ••1001 · Balance $4,250.00"},{id:3,u:"bob",p:"pizza9",n:"Bob Carter",s:"Checking ••2002 · Balance $1,830.10"}];
+const TX=[{id:1,a:1001,c:"rent",d:"Rent payment",m:-1200},{id:2,a:1001,c:"groceries",d:"Grocery Mart",m:-86.4},{id:3,a:1001,c:"salary",d:"Salary",m:3500},{id:4,a:2002,c:"rent",d:"Rent payment",m:-950},{id:5,a:3003,c:"medical",d:"City Clinic",m:-410}];
+const CH={
+  login:[["alice + correct password","alice","cat123"],["comment: admin'--","admin'--","x"],["always true","' OR 1=1 --","x"],["stray quote","alice'","x"]],
+  search:[["rent","rent",""],["comment: rent'--","rent'--",""],["always true","' OR 1=1 --",""],["stray quote","rent'",""]]
+};
+let site="login",mode="unsafe",ran=false,busy=false;
+const still=matchMedia("(prefers-reduced-motion: reduce)").matches,wait=ms=>new Promise(r=>setTimeout(r,ms));
+
+function an(v,p){
+  const S=site==="login",all=S?USERS:TX;
+  const q=v.indexOf("'");
+  if(q<0){
+    if(S&&p.includes("'")) return {k:"err",pass:1};
+    return {k:"ok",rows:S?USERS.filter(r=>r.u===v&&r.p===p):TX.filter(t=>t.c===v&&t.a===1001)};
+  }
+  const before=v.slice(0,q),rest=v.slice(q+1),c=rest.indexOf("--");
+  if(c<0) return {k:"err",before,rest};
+  const inj=rest.slice(0,c),t=inj.trim(),b={before,rest,c,inj};
+  if(!t) return {...b,k:"hack",rows:S?USERS.filter(r=>r.u===before):TX.filter(x=>x.c===before)};
+  if(/^or\s+(1\s*=\s*1|true)$/i.test(t)) return {...b,k:"hack",rows:all.slice()};
+  return {...b,k:"err"};
+}
+function calc(){
+  const v=$("wu").value,p=$("wp").value,S=site==="login";
+  if(mode==="safe") return {v,p,a:null,err:false,hack:false,rows:S?USERS.filter(r=>r.u===v&&r.p===p):TX.filter(t=>t.c===v&&t.a===1001)};
+  const a=an(v,p);
+  return {v,p,a,err:a.k==="err",hack:a.k==="hack",rows:a.rows||[]};
+}
+function s1(c){
+  return site==="login"?`${K("POST")} /login\n\nusername=${esc(enc(c.v))}&password=${esc(enc(c.p))}`
+    :`${K("GET")} /transactions?category=${esc(enc(c.v))}\nCookie: session=alice   ${"<span class=mut>(signed in, account 1001)</span>"}`;
+}
+function s2(){
+  const m=s=>`<mark class="slot">${s}</mark>`;
+  if(site==="login") return mode==="safe"
+    ?`username = request.form["username"]\npassword = request.form["password"]\ndb.execute(\n  "SELECT * FROM users WHERE username = ? AND password = ?",\n  (${m("username")}, ${m("password")}))`
+    :`username = request.form["username"]\npassword = request.form["password"]\nquery = "SELECT * FROM users WHERE username = '" + ${m("username")} + "' AND password = '" + ${m("password")} + "'"\ndb.execute(query)`;
+  return mode==="safe"
+    ?`category = request.args["category"]\nacct = session["account_id"]   # 1001\ndb.execute(\n  "SELECT * FROM transactions WHERE category = ? AND account_id = ?",\n  (${m("category")}, acct))`
+    :`category = request.args["category"]\nacct = session["account_id"]   # 1001\nquery = "SELECT * FROM transactions WHERE category = '" + ${m("category")} + "' AND account_id = " + str(acct)\ndb.execute(query)`;
+}
+function s3(c){
+  const S=site==="login",a=c.a;
+  const head=S?`${K("SELECT")} * ${K("FROM")} users ${K("WHERE")} username = `:`${K("SELECT")} * ${K("FROM")} transactions ${K("WHERE")} category = `;
+  const tail=S?`' ${K("AND")} password = '`:`' ${K("AND")} account_id = 1001`;
+  const plain=S?`' AND password = '${esc(c.p)}'`:`' AND account_id = 1001`;
+  if(mode==="safe") return `${head}<mark class="ph">?</mark> ${K("AND")} ${S?"password":"account_id"} = <mark class="ph">?</mark>\n<span class="mut">data sent separately:</span> ${mk("slot",c.v)} ${mk("slot",S?c.p:"1001")}`;
+  const open=head+"'";
+  if(a.k==="ok") return open+mk("slot",c.v)+tail+(S?mk("slot",c.p)+"'":"");
+  if(a.pass) return open+mk("slot",c.v)+tail+mk("inj",c.p)+"'";
+  if(a.c===undefined) return open+mk("slot",a.before)+mk("inj","'"+a.rest)+plain;
+  return open+mk("slot",a.before)+mk("inj","'"+a.inj)+`<span class="dead">✂ ${esc(a.rest.slice(a.c))}${plain}</span>`;
+}
+function lgd(){
+  return mode==="safe"
+    ?'<span><mark class="ph">?</mark> placeholder</span><span><mark class="slot">text</mark> data, never commands</span>'
+    :'<span><mark class="slot">text</mark> treated as data</span><span><mark class="inj">text</mark> treated as SQL</span><span><span class="dead">✂ text</span> ignored (comment)</span>';
+}
+function expl(c){
+  const S=site==="login",a=c.a;
+  const gone=S?"the password check":"<code>AND account_id = 1001</code>, the rule that limits results to your own account";
+  if(mode==="safe") return `Fixed code: the database looked for ${S?"a user":"a category"} literally named “${esc(c.v)}”. The input stayed data, so quotes and <code>--</code> did nothing special.`;
+  if(a.k==="ok") return "Normal input: everything you typed stayed inside the yellow blank.";
+  if(a.k==="err") return "The quote closed the blank early and left a stray quote behind, so the sentence broke.";
+  return a.inj.trim()
+    ?`✂ <code>--</code> is a comment, so the database ignores the rest of the line, including ${gone}. Your red text <code>OR 1=1</code> is always true, so every row matches.`
+    :`✂ <code>--</code> is a comment, so the database ignores the rest of the line. That switches off ${gone}.`;
+}
+function s4(c){
+  if(c.err) return '<div class="dberr">✕ The database could not understand this query (syntax error)</div>';
+  const S=site==="login",rows=S?USERS:TX;
+  const head=S?"<th>id</th><th>username</th><th>password</th>":"<th>id</th><th>account</th><th>category</th><th>description</th><th>amount</th>";
+  const body=rows.map(r=>{
+    const hit=c.rows.includes(r),leak=hit&&!S&&r.a!==1001;
+    return `<tr class="${hit?(leak?"hit leak":"hit"):""}">`+(S?`<td>${r.id}</td><td>${r.u}</td><td>${r.p}</td>`:`<td>${r.id}</td><td>${r.a}</td><td>${r.c}</td><td>${r.d}</td><td>${r.m}</td>`)+"</tr>";
+  }).join("");
+  return `<table class="tbl${c.hack&&S?" bad":""}"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table><div class="cnt">${c.rows.length} row${c.rows.length===1?"":"s"} returned (highlighted)</div>`;
+}
+function s5(c){
+  const S=site==="login",none=!c.err&&S&&c.rows.length===0;
+  const L=[["try:","a"],["    rows = db.execute(query)","a"],["except SyntaxError:","e"],["    return error_500()","e"]];
+  if(S) L.push(["if len(rows) > 0:","c"],["    sign_in(rows[0])    # the FIRST row","y"],["else:","c"],["    show('Invalid username or password')","n"]);
+  else L.push(["show_table(rows)","y"]);
+  const on=g=>g==="a"||(g==="e"&&c.err)||(g==="c"&&!c.err)||(g==="y"&&!c.err&&(!S||c.rows.length>0))||(g==="n"&&none);
+  let resp;
+  if(c.err) resp="→ browser: <b>500 Internal Server Error</b>";
+  else if(S) resp=c.rows.length?`→ browser: <b>200 OK</b>, signed in as <b>${esc(c.rows[0].u)}</b>`:"→ browser: <b>200 OK</b>, “Invalid username or password”";
+  else resp=`→ browser: <b>200 OK</b>, table with ${c.rows.length} row${c.rows.length===1?"":"s"}`;
+  return L.map(([t,g])=>`<span class="cl${on(g)?" t":""}">${esc(t)}</span>`).join("")+`<div class="resp">${resp}</div>`;
+}
+function page(c){
+  const S=site==="login",fm=n=>(n<0?"−$":"$")+Math.abs(n).toFixed(2);
+  if(c.err) return '<div class="card err"><b>Something went wrong</b><small>Error 500. Please try again later.</small></div>';
+  if(S){
+    if(!c.rows.length) return '<div class="card err"><b>Invalid username or password</b></div>';
+    const r=c.rows[0];return `<div class="card"><b>Welcome back, ${esc(r.u)}</b><small>${esc(r.s)}</small></div>`;
+  }
+  if(!c.rows.length) return '<div class="card"><b>No transactions found</b></div>';
+  return '<table class="tx"><thead><tr><th>Description</th><th>Account</th><th>Amount</th></tr></thead><tbody>'+c.rows.map(t=>`<tr><td>${esc(t.d)}</td><td class="acct">••${t.a}</td><td>${fm(t.m)}</td></tr>`).join("")+"</tbody></table>";
+}
+function verdict(c){
+  const S=site==="login";
+  if(c.err) return ["warn","The query broke, so the server returned an error."];
+  if(S){
+    if(!c.rows.length) return ["warn","No row matched, so the sign-in was refused."];
+    return c.hack?["bad",`Signed in as ${esc(c.rows[0].u)} without a valid password.`]:["ok","Signed in normally: both fields matched a row."];
+  }
+  if(!c.rows.length) return ["warn","No transactions matched."];
+  return c.rows.some(t=>t.a!==1001)?["bad","This list includes other customers’ transactions."]:["ok","Only your own transactions came back."];
+}
+function render(){
+  const c=calc(),S=site==="login";
+  $("url").textContent="🔒 meridianbank.example"+(S?"/login":"/transactions?category="+enc(c.v));
+  $("b1").innerHTML=s1(c);$("b2").innerHTML=s2();$("b3").innerHTML=s3(c);
+  $("lg").innerHTML=lgd();$("ex").innerHTML=expl(c);$("b4").innerHTML=s4(c);$("b5").innerHTML=s5(c);
+  $("bkRes").innerHTML=ran?page(c):"";
+  const vd=$("verdict");
+  if(ran){const[t,x]=verdict(c);vd.className="verdict show "+t;vd.innerHTML=x;}else vd.className="verdict";
+}
+async function run(){
+  if(busy)return;busy=true;ran=false;
+  const st=[...$("pipe").children];st.forEach(x=>x.classList.remove("on"));render();
+  for(const x of st){x.classList.add("on");if(!still)await wait(500);}
+  ran=true;render();busy=false;
+}
+function reset(){ran=false;[...$("pipe").children].forEach(x=>x.classList.remove("on"));render();}
+function setSite(s){
+  site=s;const S=s==="login";
+  $("tLogin").classList.toggle("active",S);$("tSearch").classList.toggle("active",!S);
+  $("bkT").textContent=S?"Sign in":"Search transactions";
+  $("bkS").textContent=S?"Access your accounts securely.":"Signed in as Alice Morgan · Checking ••1001";
+  $("l1").textContent=S?"Username":"Category";
+  $("wu").placeholder=S?"":"e.g. rent, groceries, salary";
+  $("f2").style.display=S?"block":"none";
+  $("go").textContent=S?"Sign in":"Search";
+  $("chips").innerHTML=CH[s].map((c,i)=>`<button class="cb-btn" data-i="${i}">${esc(c[0])}</button>`).join("");
+  $("wu").value=CH[s][0][1];$("wp").value=CH[s][0][2];
+  reset();
+}
+function setMode(m){
+  mode=m;$("mUnsafe").classList.toggle("active",m==="unsafe");$("mSafe").classList.toggle("active",m==="safe");reset();
+}
+$("tLogin").onclick=()=>setSite("login");
+$("tSearch").onclick=()=>setSite("search");
+$("mUnsafe").onclick=()=>setMode("unsafe");
+$("mSafe").onclick=()=>setMode("safe");
+$("go").onclick=run;
+["wu","wp"].forEach(id=>{$(id).addEventListener("input",render);$(id).addEventListener("keydown",e=>{if(e.key==="Enter")run();});});
+$("chips").addEventListener("click",e=>{
+  const b=e.target.closest(".cb-btn");if(!b)return;
+  const c=CH[site][+b.dataset.i];$("wu").value=c[1];$("wp").value=c[2];run();
+});
+$("cp").onclick=()=>{const on=$("pa").classList.toggle("show");$("cp").textContent=on?"Hide answer":"Reveal answer";};
+setSite("login");
+</script>
+</body>
+</html>
